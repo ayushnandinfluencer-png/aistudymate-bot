@@ -29,12 +29,49 @@ genai.configure(api_key=GEMINI_API_KEY)
 gemini = genai.GenerativeModel("gemini-1.5-flash")
 
 # =========================
-# CORE FUNCTION (RAG)
+# LANGUAGE + INTENT DETECTION
+# =========================
+def detect_language_and_intent(query):
+    prompt = f"""
+Detect:
+1. Language of the query
+2. If user wants response in another language
+
+Query:
+{query}
+
+Respond in JSON:
+{{
+"input_language": "...",
+"output_language": "...",
+"clean_query": "..."
+}}
+"""
+    try:
+        response = gemini.generate_content(prompt)
+        return eval(response.text)
+    except:
+        return {
+            "input_language": "unknown",
+            "output_language": "same",
+            "clean_query": query
+        }
+
+# =========================
+# CORE FUNCTION (RAG + SMART)
 # =========================
 def ask_question(query):
-    try:
-        query_embedding = model.encode(query).tolist()
+    if not query.strip():
+        return "⚠️ Please ask a valid question."
 
+    try:
+        lang_data = detect_language_and_intent(query)
+        clean_query = lang_data["clean_query"]
+
+        # EMBEDDING
+        query_embedding = model.encode(clean_query).tolist()
+
+        # PINECONE SEARCH
         results = index.query(
             vector=query_embedding,
             top_k=5,
@@ -44,38 +81,53 @@ def ask_question(query):
         context = ""
         sources = ""
 
-        for match in results['matches']:
-            text = match['metadata'].get('text', '')
-            page = match['metadata'].get('page_number', 'N/A')
-            book = match['metadata'].get('book_name', 'NCERT')
+        for match in results.get('matches', []):
+            metadata = match.get('metadata', {})
+            text = metadata.get('text', '')
+            page = metadata.get('page_number', 'N/A')
+            book = metadata.get('book_name', 'NCERT')
 
             context += text + "\n\n"
             sources += f"{book} - Page {page}\n"
 
+        if not context:
+            return "❌ No relevant data found. Try asking differently."
+
+        # FINAL PROMPT
         prompt = f"""
-You are a helpful teacher.
+You are a highly intelligent teacher AI.
 
-Answer in the SAME LANGUAGE as the question.
-
-Explain in simple terms so students can understand easily.
-
-Use the context below to answer.
+Rules:
+- Answer in SAME language as student unless specified otherwise
+- Keep explanation simple and student-friendly
+- Be accurate and based on context
+- If student mentions board (CBSE/ICSE/State), adapt explanation style
+- Do NOT hallucinate outside context
 
 Context:
 {context}
 
 Question:
-{query}
+{clean_query}
 """
 
         response = gemini.generate_content(prompt)
 
-        final_answer = response.text + "\n\n📚 Sources:\n" + sources
+        answer = response.text.strip()
+
+        # ADD SOURCE + DISCLAIMER
+        final_answer = f"""{answer}
+
+📚 Sources:
+{sources}
+
+⚠️ Note: Based on NCERT/reference books. Please verify with your official textbook.
+"""
+
         return final_answer
 
     except Exception as e:
-        return f"Error: {str(e)}"
-
+        return f"❌ Error: {str(e)}"
 
 # =========================
 # TELEGRAM SEND FUNCTION
@@ -88,8 +140,10 @@ def send_message(chat_id, text):
         "text": text[:4000]  # Telegram limit safety
     }
 
-    requests.post(url, json=payload)
-
+    try:
+        requests.post(url, json=payload)
+    except:
+        pass
 
 # =========================
 # TELEGRAM WEBHOOK
@@ -98,23 +152,25 @@ def send_message(chat_id, text):
 def webhook():
     data = request.get_json()
 
-    if "message" in data:
-        chat_id = data["message"]["chat"]["id"]
-        text = data["message"].get("text", "")
+    try:
+        if "message" in data:
+            chat_id = data["message"]["chat"]["id"]
+            text = data["message"].get("text", "")
 
-        answer = ask_question(text)
-        send_message(chat_id, answer)
+            answer = ask_question(text)
+            send_message(chat_id, answer)
+
+    except Exception as e:
+        print("Webhook Error:", e)
 
     return "ok"
 
-
 # =========================
-# HEALTH CHECK (optional)
+# HEALTH CHECK
 # =========================
 @app.route("/", methods=["GET"])
 def home():
-    return "AI StudyMate Bot is running!"
-
+    return "StudyMate AI Telegram Bot is running 🚀"
 
 # =========================
 # RUN FOR RENDER
