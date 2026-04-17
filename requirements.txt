@@ -1,5 +1,4 @@
 flask
 requests
 pinecone
-sentence-transformers
 google-generativeai

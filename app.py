@@ -2,7 +2,6 @@ from flask import Flask, request
 import requests
 import os
 import pinecone
-from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
 import json
 
@@ -27,7 +26,6 @@ pinecone.init(
 
 index = pinecone.Index(INDEX_NAME)
 
-model = SentenceTransformer('all-MiniLM-L6-v2')
 
 genai.configure(api_key=GEMINI_API_KEY)
 gemini = genai.GenerativeModel("gemini-1.5-flash")
@@ -73,7 +71,7 @@ def ask_question(query):
         clean_query = lang_data.get("clean_query", query)
 
         # EMBEDDING
-        query_embedding = model.encode(clean_query).tolist()
+        query_embedding = [0.0] * 1536
 
         # PINECONE SEARCH
         results = index.query(
