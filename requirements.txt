@@ -1,0 +1,5 @@
+flask
+twilio
+pinecone
+sentence-transformers
+google-generativeai
