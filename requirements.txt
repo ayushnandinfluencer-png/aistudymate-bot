@@ -1,5 +1,5 @@
 flask
 requests
-pinecone-client
+pinecone
 sentence-transformers
 google-generativeai

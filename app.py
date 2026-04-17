@@ -1,10 +1,10 @@
 from flask import Flask, request
 import requests
 import os
-
-from pinecone import Pinecone
+import pinecone
 from sentence_transformers import SentenceTransformer
 import google.generativeai as genai
+import json
 
 app = Flask(__name__)
 
@@ -20,8 +20,12 @@ INDEX_NAME = "aistudymate"
 # =========================
 # INIT SERVICES
 # =========================
-pc = Pinecone(api_key=PINECONE_API_KEY)
-index = pc.Index(INDEX_NAME)
+pinecone.init(
+    api_key=PINECONE_API_KEY,
+    environment="us-east-1"   # ✅ based on your dashboard
+)
+
+index = pinecone.Index(INDEX_NAME)
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
@@ -40,7 +44,7 @@ Detect:
 Query:
 {query}
 
-Respond in JSON:
+Respond ONLY in JSON:
 {{
 "input_language": "...",
 "output_language": "...",
@@ -49,7 +53,7 @@ Respond in JSON:
 """
     try:
         response = gemini.generate_content(prompt)
-        return eval(response.text)
+        return json.loads(response.text)
     except:
         return {
             "input_language": "unknown",
@@ -66,7 +70,7 @@ def ask_question(query):
 
     try:
         lang_data = detect_language_and_intent(query)
-        clean_query = lang_data["clean_query"]
+        clean_query = lang_data.get("clean_query", query)
 
         # EMBEDDING
         query_embedding = model.encode(clean_query).tolist()
@@ -100,9 +104,9 @@ You are a highly intelligent teacher AI.
 Rules:
 - Answer in SAME language as student unless specified otherwise
 - Keep explanation simple and student-friendly
-- Be accurate and based on context
-- If student mentions board (CBSE/ICSE/State), adapt explanation style
-- Do NOT hallucinate outside context
+- Be accurate and based ONLY on context
+- Adapt to board (CBSE/ICSE/State) if mentioned
+- Do NOT hallucinate
 
 Context:
 {context}
@@ -112,10 +116,8 @@ Question:
 """
 
         response = gemini.generate_content(prompt)
-
         answer = response.text.strip()
 
-        # ADD SOURCE + DISCLAIMER
         final_answer = f"""{answer}
 
 📚 Sources:
@@ -137,7 +139,7 @@ def send_message(chat_id, text):
 
     payload = {
         "chat_id": chat_id,
-        "text": text[:4000]  # Telegram limit safety
+        "text": text[:4000]
     }
 
     try:
@@ -173,7 +175,7 @@ def home():
     return "StudyMate AI Telegram Bot is running 🚀"
 
 # =========================
-# RUN FOR RENDER
+# RUN
 # =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
