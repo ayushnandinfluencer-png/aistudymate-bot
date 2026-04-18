@@ -1,11 +1,9 @@
 from flask import Flask, request
 import requests
 import os
+import json
 
-# ✅ NEW PINECONE (FIXED)
 from pinecone import Pinecone
-
-# ✅ GEMINI
 import google.generativeai as genai
 
 app = Flask(__name__)
@@ -16,20 +14,41 @@ app = Flask(__name__)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+HF_API_KEY = os.getenv("HF_API_KEY")   # 🔥 ADD THIS IN RENDER
 
 INDEX_NAME = "aistudymate"
 
 # =========================
 # INIT SERVICES
 # =========================
-
-# 🔥 FIXED PINECONE INIT (v8)
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index = pc.Index(INDEX_NAME)
 
-# GEMINI INIT
 genai.configure(api_key=GEMINI_API_KEY)
 gemini = genai.GenerativeModel("gemini-1.5-flash")
+
+# =========================
+# 🔥 HUGGINGFACE EMBEDDING
+# =========================
+def get_embedding(text):
+    API_URL = "https://api-inference.huggingface.co/pipeline/feature-extraction/sentence-transformers/all-MiniLM-L6-v2"
+
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}"
+    }
+
+    response = requests.post(API_URL, headers=headers, json={"inputs": text})
+
+    if response.status_code != 200:
+        return None
+
+    embedding = response.json()
+
+    # Flatten output (important)
+    if isinstance(embedding[0], list):
+        return embedding[0]
+
+    return embedding
 
 # =========================
 # LANGUAGE DETECTION
@@ -43,7 +62,7 @@ Detect:
 Query:
 {query}
 
-Respond in JSON:
+Respond ONLY in JSON:
 {{
 "input_language": "...",
 "output_language": "...",
@@ -52,7 +71,7 @@ Respond in JSON:
 """
     try:
         response = gemini.generate_content(prompt)
-        return eval(response.text)
+        return json.loads(response.text)
     except:
         return {
             "input_language": "unknown",
@@ -69,42 +88,42 @@ def ask_question(query):
 
     try:
         lang_data = detect_language_and_intent(query)
-        clean_query = lang_data["clean_query"]
+        clean_query = lang_data.get("clean_query", query)
 
-        # 🔥 LIGHTWEIGHT VECTOR (NO TORCH)
-        query_embedding = [0.0] * 1536
+        # 🔥 REAL EMBEDDING (FIXED)
+        query_embedding = get_embedding(clean_query)
 
-        # PINECONE SEARCH
+        if not query_embedding:
+            return "⚠️ Embedding failed. Try again."
+
+        # 🔍 Pinecone Search
         results = index.query(
             vector=query_embedding,
             top_k=5,
             include_metadata=True
         )
 
+        if not results.get("matches"):
+            return "❌ No relevant data found."
+
         context = ""
         sources = ""
 
-        for match in results.get('matches', []):
-            metadata = match.get('metadata', {})
-            text = metadata.get('text', '')
-            page = metadata.get('page_number', 'N/A')
-            book = metadata.get('book_name', 'NCERT')
+        for match in results["matches"]:
+            metadata = match.get("metadata", {})
+            text = metadata.get("text", "")
+            page = metadata.get("page_number", "N/A")
+            book = metadata.get("book_name", "NCERT")
 
-            context += text + "\n\n"
+            context += text[:500] + "\n\n"
             sources += f"{book} - Page {page}\n"
 
-        if not context:
-            return "❌ No relevant data found. Try asking differently."
-
-        # GEMINI FINAL ANSWER
         prompt = f"""
 You are a highly intelligent teacher AI.
 
 Rules:
-- Answer in SAME language as student unless specified otherwise
-- Keep explanation simple and student-friendly
-- Be accurate and based ONLY on context
-- Adapt to board (CBSE/ICSE/State) if mentioned
+- Answer in simple student-friendly language
+- Answer ONLY from given context
 - Do NOT hallucinate
 
 Context:
@@ -115,17 +134,17 @@ Question:
 """
 
         response = gemini.generate_content(prompt)
+
+        if not response or not response.text:
+            return "⚠️ AI failed. Try again."
+
         answer = response.text.strip()
 
-        final_answer = f"""{answer}
+        return f"""{answer}
 
 📚 Sources:
 {sources}
-
-⚠️ Note: Based on NCERT/reference books.
 """
-
-        return final_answer
 
     except Exception as e:
         return f"❌ Error: {str(e)}"
@@ -156,7 +175,9 @@ def webhook():
     try:
         if "message" in data:
             chat_id = data["message"]["chat"]["id"]
-            text = data["message"].get("text", "")
+            text = data["message"].get("text", "").strip()
+
+            print("User:", text)
 
             answer = ask_question(text)
             send_message(chat_id, answer)
@@ -171,7 +192,7 @@ def webhook():
 # =========================
 @app.route("/", methods=["GET"])
 def home():
-    return "StudyMate AI Telegram Bot is running 🚀"
+    return "StudyMate AI is running 🚀"
 
 # =========================
 # RUN
