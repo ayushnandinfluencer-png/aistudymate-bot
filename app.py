@@ -1,9 +1,12 @@
 from flask import Flask, request
 import requests
 import os
-import pinecone
+
+# ✅ NEW PINECONE (FIXED)
+from pinecone import Pinecone
+
+# ✅ GEMINI
 import google.generativeai as genai
-import json
 
 app = Flask(__name__)
 
@@ -19,19 +22,17 @@ INDEX_NAME = "aistudymate"
 # =========================
 # INIT SERVICES
 # =========================
-pinecone.init(
-    api_key=PINECONE_API_KEY,
-    environment="us-east-1"   # ✅ based on your dashboard
-)
 
-index = pinecone.Index(INDEX_NAME)
+# 🔥 FIXED PINECONE INIT (v8)
+pc = Pinecone(api_key=PINECONE_API_KEY)
+index = pc.Index(INDEX_NAME)
 
-
+# GEMINI INIT
 genai.configure(api_key=GEMINI_API_KEY)
 gemini = genai.GenerativeModel("gemini-1.5-flash")
 
 # =========================
-# LANGUAGE + INTENT DETECTION
+# LANGUAGE DETECTION
 # =========================
 def detect_language_and_intent(query):
     prompt = f"""
@@ -42,7 +43,7 @@ Detect:
 Query:
 {query}
 
-Respond ONLY in JSON:
+Respond in JSON:
 {{
 "input_language": "...",
 "output_language": "...",
@@ -51,7 +52,7 @@ Respond ONLY in JSON:
 """
     try:
         response = gemini.generate_content(prompt)
-        return json.loads(response.text)
+        return eval(response.text)
     except:
         return {
             "input_language": "unknown",
@@ -60,7 +61,7 @@ Respond ONLY in JSON:
         }
 
 # =========================
-# CORE FUNCTION (RAG + SMART)
+# CORE FUNCTION
 # =========================
 def ask_question(query):
     if not query.strip():
@@ -68,9 +69,9 @@ def ask_question(query):
 
     try:
         lang_data = detect_language_and_intent(query)
-        clean_query = lang_data.get("clean_query", query)
+        clean_query = lang_data["clean_query"]
 
-        # EMBEDDING
+        # 🔥 LIGHTWEIGHT VECTOR (NO TORCH)
         query_embedding = [0.0] * 1536
 
         # PINECONE SEARCH
@@ -95,7 +96,7 @@ def ask_question(query):
         if not context:
             return "❌ No relevant data found. Try asking differently."
 
-        # FINAL PROMPT
+        # GEMINI FINAL ANSWER
         prompt = f"""
 You are a highly intelligent teacher AI.
 
@@ -121,7 +122,7 @@ Question:
 📚 Sources:
 {sources}
 
-⚠️ Note: Based on NCERT/reference books. Please verify with your official textbook.
+⚠️ Note: Based on NCERT/reference books.
 """
 
         return final_answer
@@ -130,7 +131,7 @@ Question:
         return f"❌ Error: {str(e)}"
 
 # =========================
-# TELEGRAM SEND FUNCTION
+# TELEGRAM SEND
 # =========================
 def send_message(chat_id, text):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -146,7 +147,7 @@ def send_message(chat_id, text):
         pass
 
 # =========================
-# TELEGRAM WEBHOOK
+# WEBHOOK
 # =========================
 @app.route("/", methods=["POST"])
 def webhook():
